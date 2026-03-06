@@ -379,6 +379,7 @@ dependencies = [
  "device_query",
  "pixels",
  "rand",
+ "winapi",
  "winit",
 ]
 
