@@ -9,3 +9,7 @@ pixels = "0.15.0"
 rand = "0.10.0"
 winit = "0.30.12"
 winapi = { version = "0.3", features = ["winuser","dwmapi", "libloaderapi", "winnt"] }
+image = "0.25.9"
+
+[build-dependencies]
+winres = "0.1"

@@ -9,6 +9,7 @@ use winapi::shared::minwindef::TRUE;
 use winapi::um::dwmapi::{DWM_BLURBEHIND, DwmEnableBlurBehindWindow};
 use winapi::um::winuser::SetCursorPos;
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use winit::window::Icon;
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalPosition,
@@ -28,6 +29,11 @@ const PINK: &[u8] = &[0xFF, 0x30, 0x60, 0xFF];
 const HIGHT: u32 = 240;
 const PIXEL_WIDTH: u32 = 80;
 const PIXEL_HIGHT: u32 = 60;
+
+// 타이머 / 시간 상수
+const RUSH_DURATION: f32 = 0.25;
+const IDLE_DURATION: f32 = 2.0;
+const EXIT_HP_RECOVERY: f32 = 350.0;
 
 // 기준값 (pixel_scale = 4 기준)
 const BASE_PIXEL_SCALE: f32 = 4.0;
@@ -67,7 +73,7 @@ impl Default for App {
             is_cursor_on_window: false,
             rush: None,
             idle: None,
-            grab_mode: true,
+            grab_mode: false,
             is_grab: false,
             click_hp: MAX_CLICK_HP,
             exit_hp: PIXEL_HIGHT as f32,
@@ -136,6 +142,7 @@ impl ApplicationHandler for App {
 
         let base_attrs = Window::default_attributes()
             .with_title("Cuty Window")
+            .with_window_icon(Some(load_icon()))
             .with_inner_size(winit::dpi::LogicalSize::new(win_width, win_height))
             .with_resizable(false)
             .with_transparent(true)
@@ -212,8 +219,7 @@ impl ApplicationHandler for App {
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         let mut mouse_pos = MousePos::default();
-        let mut delta = Instant::now().duration_since(self.timer).as_secs_f32();
-        delta = delta.min(0.001);
+        let delta = Instant::now().duration_since(self.timer).as_secs_f32();
 
         let ps = self.pixel_scale;
         let grab_threshold = scaled(BASE_GRAB_THRESHOLD, ps);
@@ -266,7 +272,7 @@ impl ApplicationHandler for App {
                 self.click_hp += MAX_CLICK_HP * 2.0 * delta;
             }
             if self.exit_hp < PIXEL_WIDTH as f32 && self.grab_mode {
-                self.exit_hp += 350.0 * delta;
+                self.exit_hp += EXIT_HP_RECOVERY * delta;
             }
 
             if let Ok(pos) = _window.outer_position() {
@@ -412,7 +418,7 @@ fn idle_move(
     monitor: MonitorHandle,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
-    allow_offscreen: bool, // 추가
+    allow_offscreen: bool,
 ) {
     let speed = scaled(BASE_IDLE_SPEED, pixel_scale) * delta;
 
@@ -463,7 +469,7 @@ fn idle_move(
         }
     }
 
-    if dur > 2.0 {
+    if dur > IDLE_DURATION {
         app.idle = None;
     }
 }
@@ -482,7 +488,7 @@ fn avoid_rush(
         pos.y as f32 + rush.y * speed,
     ));
     let dur = Instant::now().duration_since(rush.time).as_secs_f32();
-    if dur > 0.25 {
+    if dur > RUSH_DURATION {
         app.rush = None;
     }
 }
@@ -595,6 +601,18 @@ fn is_windows_11() -> bool {
         rtl_get_version(&mut info);
         info.dwBuildNumber >= 22000
     }
+}
+
+fn load_icon() -> Icon {
+    let bytes = include_bytes!("../Cuty_window.png");
+
+    let image = image::load_from_memory(bytes)
+        .expect("fail: icon load")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    let rgba = image.into_raw();
+
+    Icon::from_rgba(rgba, width, height).expect("fail: Icon spawn")
 }
 
 fn main() {
