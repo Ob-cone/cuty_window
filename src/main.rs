@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+//#![windows_subsystem = "windows"]
 
 use device_query::{DeviceQuery, DeviceState};
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
@@ -33,18 +33,19 @@ const PIXEL_HIGHT: u32 = 60;
 // 타이머 / 시간 상수
 const RUSH_DURATION: f32 = 0.25;
 const IDLE_DURATION: f32 = 2.0;
-const EXIT_HP_RECOVERY: f32 = 350.0;
+const EXIT_HP_RECOVERY: f32 = 350.0; // exit_hp 초당 회복량
 
 // 기준값 (pixel_scale = 4 기준)
 const BASE_PIXEL_SCALE: f32 = 4.0;
 const BASE_GRAB_THRESHOLD: f32 = 20.0;
 const BASE_AVOID_THRESHOLD: f32 = 760.0;
-const BASE_GRAB_SPEED: f32 = 48000.0;
-const BASE_AVOID_SPEED: f32 = 48000.0;
-const BASE_RUSH_SPEED: f32 = 36000.0;
-const BASE_IDLE_SPEED: f32 = 6000.0;
+const BASE_GRAB_SPEED: f32 = 4000.0;
+const BASE_AVOID_SPEED: f32 = 4000.0;
+const BASE_RUSH_SPEED: f32 = 3000.0;
+const BASE_IDLE_SPEED: f32 = 600.0;
 
 const MAX_CLICK_HP: f32 = 100.0;
+const CLICK_HP_RECOVERY: f32 = 200.0; // click_hp 초당 회복량
 const CHANGE_TIME: u64 = 1 * 60;
 
 struct App {
@@ -61,6 +62,7 @@ struct App {
     exit_hp: f32,
     is_click: bool,
     pixel_scale: f32,
+    first_render: bool,
 }
 
 impl Default for App {
@@ -79,6 +81,7 @@ impl Default for App {
             exit_hp: PIXEL_HIGHT as f32,
             is_click: false,
             pixel_scale: BASE_PIXEL_SCALE,
+            first_render: true,
         }
     }
 }
@@ -154,7 +157,7 @@ impl ApplicationHandler for App {
             base_attrs
         } else {
             println!("Win10");
-            base_attrs.with_no_redirection_bitmap(true)
+            base_attrs.with_blur(true).with_visible(false) // DWM 적용 전 깜빡임 방지
         };
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
@@ -174,17 +177,26 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            window.set_visible(true); // DWM 적용 완료 후 표시
         }
 
         let physical_size = window.inner_size();
         let surface =
             SurfaceTexture::new(physical_size.width, physical_size.height, window.clone());
-        let pixels = PixelsBuilder::new(PIXEL_WIDTH, PIXEL_HIGHT, surface)
-            .surface_texture_format(pixels::wgpu::TextureFormat::Rgba8UnormSrgb)
+        let texture_format = if is_windows_11() {
+            pixels::wgpu::TextureFormat::Rgba8UnormSrgb
+        } else {
+            pixels::wgpu::TextureFormat::Bgra8UnormSrgb
+        };
+        let mut pixels_builder = PixelsBuilder::new(PIXEL_WIDTH, PIXEL_HIGHT, surface)
+            .surface_texture_format(texture_format)
             .blend_state(pixels::wgpu::BlendState::ALPHA_BLENDING)
-            .clear_color(pixels::wgpu::Color::TRANSPARENT)
-            .build()
-            .unwrap();
+            .clear_color(pixels::wgpu::Color::TRANSPARENT);
+        if !is_windows_11() {
+            // Win10: DX11이 DWM 알파 합성에 더 안정적
+            pixels_builder = pixels_builder.wgpu_backend(pixels::wgpu::Backends::GL);
+        }
+        let pixels = pixels_builder.build().unwrap();
         self.pixels = Some(pixels);
 
         self.window = Some(window);
@@ -218,8 +230,15 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        let mut mouse_pos = MousePos::default();
         let delta = Instant::now().duration_since(self.timer).as_secs_f32();
+
+        if delta < 1.0 / 60.0 {
+            return;
+        }
+        println!("Delta: {:?}, Frame: {:?}", delta, 1.0 / delta);
+        let delta = delta.min(1.0 / 20.0);
+
+        let mut mouse_pos = MousePos::default();
 
         let ps = self.pixel_scale;
         let grab_threshold = scaled(BASE_GRAB_THRESHOLD, ps);
@@ -269,7 +288,7 @@ impl ApplicationHandler for App {
                 self.click_hp = MAX_CLICK_HP;
                 self.exit_hp = PIXEL_HIGHT as f32;
             } else if self.click_hp < MAX_CLICK_HP {
-                self.click_hp += MAX_CLICK_HP * 2.0 * delta;
+                self.click_hp += CLICK_HP_RECOVERY * delta;
             }
             if self.exit_hp < PIXEL_WIDTH as f32 && self.grab_mode {
                 self.exit_hp += EXIT_HP_RECOVERY * delta;
@@ -348,6 +367,27 @@ impl ApplicationHandler for App {
                 }
             }
             let _ = pixels.render();
+
+            // 첫 렌더 후 wgpu가 DWM 블러를 덮어쓰므로 재적용
+            if self.first_render && !is_windows_11() {
+                self.first_render = false;
+                if let Some(window) = &self.window {
+                    if let Ok(handle) = window.window_handle() {
+                        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                            unsafe {
+                                let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
+                                let bb = DWM_BLURBEHIND {
+                                    dwFlags: 0x01,
+                                    fEnable: TRUE,
+                                    hRgnBlur: std::ptr::null_mut(),
+                                    fTransitionOnMaximized: 0,
+                                };
+                                DwmEnableBlurBehindWindow(hwnd, &bb);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         self.timer = Instant::now()
@@ -431,11 +471,9 @@ fn idle_move(
         let win_w = window.inner_size().width as f32;
         let win_h = window.inner_size().height as f32;
 
-        // 창이 화면 밖으로 못 나가도록 클램프
         new_x = new_x.clamp(0.0, (mon_w - win_w).max(0.0));
         new_y = new_y.clamp(0.0, (mon_h - win_h).max(0.0));
 
-        // 벽에 닿으면 반사
         if let Some(_idle) = &mut app.idle {
             if new_x <= 0.0 || new_x >= mon_w - win_w {
                 _idle.x *= -1.0;
@@ -451,7 +489,6 @@ fn idle_move(
     let dur = Instant::now().duration_since(idle.time).as_secs_f32();
 
     if allow_offscreen {
-        // 기존 화면 밖 반전 로직
         if idle.change == false && (center_x < -200 || center_x > monitor.size().width as i32 + 200)
         {
             if let Some(_idle) = &mut app.idle {
