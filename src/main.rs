@@ -1,4 +1,4 @@
-//#![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 use device_query::{DeviceQuery, DeviceState};
 use pixels::{Pixels, PixelsBuilder, SurfaceTexture};
@@ -26,27 +26,29 @@ const DARK_RED: &[u8] = &[0x77, 0x00, 0x06, 0xFF];
 const WHITE_RED: &[u8] = &[0xff, 0xf0, 0xf0, 0xFF];
 const PINK: &[u8] = &[0xFF, 0x30, 0x60, 0xFF];
 
-const HIGHT: u32 = 240;
+const HIGHT: u32 = 200;
 const PIXEL_WIDTH: u32 = 80;
 const PIXEL_HIGHT: u32 = 60;
 
-// 타이머 / 시간 상수
-const RUSH_DURATION: f32 = 0.25;
-const IDLE_DURATION: f32 = 2.0;
-const EXIT_HP_RECOVERY: f32 = 350.0; // exit_hp 초당 회복량
+const RUSH_DURATION: f32 = 0.3;
+const IDLE_DURATION: f32 = 3.14;
 
-// 기준값 (pixel_scale = 4 기준)
 const BASE_PIXEL_SCALE: f32 = 4.0;
+const BASE_SCALE_FACTOR: f32 = 2.0;
+
 const BASE_GRAB_THRESHOLD: f32 = 20.0;
-const BASE_AVOID_THRESHOLD: f32 = 760.0;
-const BASE_GRAB_SPEED: f32 = 4000.0;
-const BASE_AVOID_SPEED: f32 = 4000.0;
-const BASE_RUSH_SPEED: f32 = 3000.0;
-const BASE_IDLE_SPEED: f32 = 600.0;
+const BASE_AVOID_THRESHOLD: f32 = 600.0;
+const BASE_GRAB_SPEED: f32 = 6000.0;
+const BASE_AVOID_SPEED: f32 = 6000.0;
+const BASE_RUSH_SPEED: f32 = 5000.0;
+const BASE_IDLE_SPEED: f32 = 1000.0;
 
 const MAX_CLICK_HP: f32 = 100.0;
-const CLICK_HP_RECOVERY: f32 = 200.0; // click_hp 초당 회복량
-const CHANGE_TIME: u64 = 1 * 60;
+const CLICK_HP_RECOVERY: f32 = 25.0;
+const EXIT_HP_RECOVERY: f32 = 30.0;
+const CHANGE_TIME: u64 = 60;
+
+const IDLE_INWARD_PROB: f64 = 0.75;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -62,7 +64,6 @@ struct App {
     exit_hp: f32,
     is_click: bool,
     pixel_scale: f32,
-    first_render: bool,
 }
 
 impl Default for App {
@@ -81,7 +82,6 @@ impl Default for App {
             exit_hp: PIXEL_HIGHT as f32,
             is_click: false,
             pixel_scale: BASE_PIXEL_SCALE,
-            first_render: true,
         }
     }
 }
@@ -109,9 +109,12 @@ struct MousePos {
     relative_y: i32,
 }
 
-// pixel_scale 비율로 값 스케일
 fn scaled(base: f32, pixel_scale: f32) -> f32 {
     base * (pixel_scale / BASE_PIXEL_SCALE)
+}
+
+fn scaled_threshold(base: f32, scale_factor: f32) -> f32 {
+    base * (scale_factor / BASE_SCALE_FACTOR)
 }
 
 impl ApplicationHandler for App {
@@ -128,14 +131,12 @@ impl ApplicationHandler for App {
             })
             .unwrap_or(1.0);
 
-        let pixel_scale = ((HIGHT as f32 * logical_scale) / PIXEL_HIGHT as f32)
-            .round()
-            .max(1.0) as u32;
+        let pixel_scale = ((HIGHT as f32 * logical_scale) / PIXEL_HIGHT as f32).max(1.0);
 
-        let win_width = PIXEL_WIDTH * pixel_scale;
-        let win_height = PIXEL_HIGHT * pixel_scale;
+        let win_width = (PIXEL_WIDTH as f32 * pixel_scale).round() as u32;
+        let win_height = (PIXEL_HIGHT as f32 * pixel_scale).round() as u32;
 
-        self.pixel_scale = pixel_scale as f32;
+        self.pixel_scale = pixel_scale;
 
         println!(
             "win: {:?}, pixel_scale: {}",
@@ -157,7 +158,7 @@ impl ApplicationHandler for App {
             base_attrs
         } else {
             println!("Win10");
-            base_attrs.with_blur(true).with_visible(false) // DWM 적용 전 깜빡임 방지
+            base_attrs.with_no_redirection_bitmap(true).with_blur(true)
         };
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
@@ -177,26 +178,17 @@ impl ApplicationHandler for App {
                     }
                 }
             }
-            window.set_visible(true); // DWM 적용 완료 후 표시
         }
 
         let physical_size = window.inner_size();
         let surface =
             SurfaceTexture::new(physical_size.width, physical_size.height, window.clone());
-        let texture_format = if is_windows_11() {
-            pixels::wgpu::TextureFormat::Rgba8UnormSrgb
-        } else {
-            pixels::wgpu::TextureFormat::Bgra8UnormSrgb
-        };
-        let mut pixels_builder = PixelsBuilder::new(PIXEL_WIDTH, PIXEL_HIGHT, surface)
-            .surface_texture_format(texture_format)
+        let pixels = PixelsBuilder::new(win_width, win_height, surface)
+            .surface_texture_format(pixels::wgpu::TextureFormat::Rgba8UnormSrgb)
             .blend_state(pixels::wgpu::BlendState::ALPHA_BLENDING)
-            .clear_color(pixels::wgpu::Color::TRANSPARENT);
-        if !is_windows_11() {
-            // Win10: DX11이 DWM 알파 합성에 더 안정적
-            pixels_builder = pixels_builder.wgpu_backend(pixels::wgpu::Backends::GL);
-        }
-        let pixels = pixels_builder.build().unwrap();
+            .clear_color(pixels::wgpu::Color::TRANSPARENT)
+            .build()
+            .unwrap();
         self.pixels = Some(pixels);
 
         self.window = Some(window);
@@ -235,14 +227,11 @@ impl ApplicationHandler for App {
         if delta < 1.0 / 60.0 {
             return;
         }
-        println!("Delta: {:?}, Frame: {:?}", delta, 1.0 / delta);
         let delta = delta.min(1.0 / 20.0);
 
         let mut mouse_pos = MousePos::default();
 
         let ps = self.pixel_scale;
-        let grab_threshold = scaled(BASE_GRAB_THRESHOLD, ps);
-        let avoid_threshold = scaled(BASE_AVOID_THRESHOLD, ps);
 
         let mut color = if self.grab_mode { DARK_RED } else { DARK_BLUE };
 
@@ -276,7 +265,9 @@ impl ApplicationHandler for App {
             if !self.is_click && button && self.is_cursor_on_window {
                 self.is_click = true;
                 self.click_hp -= 10.0;
-                color = WHITE_RED;
+                if self.grab_mode {
+                    color = WHITE_RED;
+                }
                 println!("Hp: {:?}", self.click_hp);
             }
             if !button {
@@ -308,15 +299,20 @@ impl ApplicationHandler for App {
                 .sqrt();
 
                 if let Some(monitor) = _window.current_monitor() {
+                    let sf = monitor.scale_factor() as f32;
+                    let grab_threshold = scaled_threshold(BASE_GRAB_THRESHOLD, sf);
+                    let avoid_threshold = scaled_threshold(BASE_AVOID_THRESHOLD, sf);
+
                     if self.grab_mode {
                         if len > grab_threshold && !self.is_grab {
-                            grab_move(self, delta, mouse_pos, &_window, len, pos, ps);
+                            grab_move(self, delta, mouse_pos, &_window, len, pos, ps, sf);
                         } else if self.is_grab {
                             unsafe {
                                 SetCursorPos(center_x, center_y);
                             }
                             idle_or_wander(
-                                self, delta, &_window, center_x, center_y, monitor, pos, ps, false,
+                                self, delta, &_window, center_x, center_y, monitor, pos, ps, sf,
+                                false,
                             );
                         } else {
                             self.is_grab = true;
@@ -326,16 +322,26 @@ impl ApplicationHandler for App {
                     } else if len < avoid_threshold || self.rush.is_some() {
                         self.idle = None;
                         if let Some(rush) = self.rush.clone() {
-                            avoid_rush(self, delta, &_window, &rush, pos, ps);
+                            avoid_rush(self, delta, &_window, &rush, pos, ps, sf);
                         } else {
                             avoid(
-                                self, delta, mouse_pos, center_x, center_y, monitor, len, &_window,
-                                pos, ps,
+                                self,
+                                delta,
+                                mouse_pos,
+                                center_x,
+                                center_y,
+                                monitor,
+                                len,
+                                avoid_threshold,
+                                &_window,
+                                pos,
+                                ps,
+                                sf,
                             );
                         }
                     } else {
                         idle_or_wander(
-                            self, delta, &_window, center_x, center_y, monitor, pos, ps, true,
+                            self, delta, &_window, center_x, center_y, monitor, pos, ps, sf, true,
                         );
                     }
                 }
@@ -343,15 +349,26 @@ impl ApplicationHandler for App {
         }
 
         if let Some(pixels) = &mut self.pixels {
+            let ps = self.pixel_scale;
+            let win_width = (PIXEL_WIDTH as f32 * ps).round() as usize;
+            let (nomal_x, nomal_y) = normal(mouse_pos.relative_x, mouse_pos.relative_y);
+            let (center_x, center_y) = ((PIXEL_WIDTH / 2) as i16, (PIXEL_HIGHT / 2) as i16);
+            let (eye_center_x, eye_center_y) = (
+                (center_x as f32 + nomal_x * 5.0) as i16,
+                (center_y as f32 + nomal_y * 5.0) as i16,
+            );
+
             for (i, pixel) in pixels.frame_mut().chunks_exact_mut(4).enumerate() {
-                let x = (i % PIXEL_WIDTH as usize) as i16;
-                let y = (i / PIXEL_WIDTH as usize) as i16;
-                let (nomal_x, nomal_y) = normal(mouse_pos.relative_x, mouse_pos.relative_y);
-                let (center_x, center_y) = ((PIXEL_WIDTH / 2) as i16, (PIXEL_HIGHT / 2) as i16);
-                let (eye_center_x, eye_center_y) = (
-                    (center_x as f32 + nomal_x * 5.0) as i16,
-                    (center_y as f32 + nomal_y * 5.0) as i16,
-                );
+                let ox = (i % win_width) as f32;
+                let oy = (i / win_width) as f32;
+                let x = (ox / ps).floor() as i16;
+                let y = (oy / ps).floor() as i16;
+
+                if x >= PIXEL_WIDTH as i16 || y >= PIXEL_HIGHT as i16 {
+                    pixel.copy_from_slice(BACKGROUND);
+                    continue;
+                }
+
                 let draw = draw_circle(pixel, color, x, y, eye_center_x - 20, eye_center_y, 5)
                     || draw_circle(pixel, color, x, y, eye_center_x + 20, eye_center_y, 5)
                     || draw_box(pixel, color, x, y, center_x - 30, center_y - 12, 20, 4)
@@ -367,27 +384,6 @@ impl ApplicationHandler for App {
                 }
             }
             let _ = pixels.render();
-
-            // 첫 렌더 후 wgpu가 DWM 블러를 덮어쓰므로 재적용
-            if self.first_render && !is_windows_11() {
-                self.first_render = false;
-                if let Some(window) = &self.window {
-                    if let Ok(handle) = window.window_handle() {
-                        if let RawWindowHandle::Win32(win32) = handle.as_raw() {
-                            unsafe {
-                                let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
-                                let bb = DWM_BLURBEHIND {
-                                    dwFlags: 0x01,
-                                    fEnable: TRUE,
-                                    hRgnBlur: std::ptr::null_mut(),
-                                    fTransitionOnMaximized: 0,
-                                };
-                                DwmEnableBlurBehindWindow(hwnd, &bb);
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         self.timer = Instant::now()
@@ -403,6 +399,7 @@ fn idle_or_wander(
     monitor: MonitorHandle,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
+    scale_factor: f32,
     allow_offscreen: bool,
 ) {
     if let Some(idle) = app.idle.clone() {
@@ -416,11 +413,22 @@ fn idle_or_wander(
             monitor,
             pos,
             pixel_scale,
+            scale_factor,
             allow_offscreen,
         );
     } else {
         let mut rng = rand::rng();
-        let angle = rng.random_range(0.0..TAU);
+        let angle = if rng.random_bool(IDLE_INWARD_PROB) {
+            let mon_cx = monitor.size().width as f32 / 2.0;
+            let mon_cy = monitor.size().height as f32 / 2.0;
+            let dx = mon_cx - center_x as f32;
+            let dy = mon_cy - center_y as f32;
+            let base_angle = dy.atan2(dx);
+            let spread = std::f32::consts::FRAC_PI_4;
+            base_angle + rng.random_range(-spread..spread)
+        } else {
+            rng.random_range(0.0..TAU)
+        };
         app.idle = Some(IdleData {
             time: Instant::now(),
             x: angle.cos(),
@@ -438,10 +446,11 @@ fn grab_move(
     _len: f32,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
+    scale_factor: f32,
 ) {
     let (move_x, move_y) = (mouse_pos.relative_x, mouse_pos.relative_y);
     let (x, y) = normal(move_x, move_y);
-    let speed = scaled(BASE_GRAB_SPEED, pixel_scale) * delta;
+    let speed = scaled(BASE_GRAB_SPEED, pixel_scale) * (scale_factor / BASE_SCALE_FACTOR) * delta;
     window.set_outer_position(PhysicalPosition::new(
         pos.x as f32 + x * speed,
         pos.y as f32 + y * speed,
@@ -458,9 +467,10 @@ fn idle_move(
     monitor: MonitorHandle,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
+    scale_factor: f32,
     allow_offscreen: bool,
 ) {
-    let speed = scaled(BASE_IDLE_SPEED, pixel_scale) * delta;
+    let speed = scaled(BASE_IDLE_SPEED, pixel_scale) * (scale_factor / BASE_SCALE_FACTOR) * delta;
 
     let mut new_x = pos.x as f32 + idle.x * speed;
     let mut new_y = pos.y as f32 + idle.y * speed;
@@ -518,8 +528,9 @@ fn avoid_rush(
     rush: &RushData,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
+    scale_factor: f32,
 ) {
-    let speed = scaled(BASE_RUSH_SPEED, pixel_scale) * delta;
+    let speed = scaled(BASE_RUSH_SPEED, pixel_scale) * (scale_factor / BASE_SCALE_FACTOR) * delta;
     window.set_outer_position(PhysicalPosition::new(
         pos.x as f32 + rush.x * speed,
         pos.y as f32 + rush.y * speed,
@@ -538,9 +549,11 @@ fn avoid(
     center_y: i32,
     monitor: MonitorHandle,
     len: f32,
+    avoid_threshold: f32,
     window: &Arc<Window>,
     pos: PhysicalPosition<i32>,
     pixel_scale: f32,
+    scale_factor: f32,
 ) {
     let (mut move_x, mut move_y) = (mouse_pos.relative_x, mouse_pos.relative_y);
     if center_x < 0 || center_x > monitor.size().width as i32 {
@@ -558,8 +571,11 @@ fn avoid(
         });
     }
     let (x, y) = normal(move_x, move_y);
-    let max_dist = scaled(BASE_AVOID_THRESHOLD, pixel_scale);
-    let speed = escape_speed(len, max_dist, scaled(BASE_AVOID_SPEED, pixel_scale)) * delta;
+    let speed = escape_speed(
+        len,
+        avoid_threshold,
+        scaled(BASE_AVOID_SPEED, pixel_scale) * (scale_factor / BASE_SCALE_FACTOR),
+    ) * delta;
     window.set_outer_position(PhysicalPosition::new(
         pos.x as f32 - x * speed,
         pos.y as f32 - y * speed,
