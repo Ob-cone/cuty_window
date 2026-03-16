@@ -48,7 +48,7 @@ const CLICK_HP_RECOVERY: f32 = 25.0;
 const EXIT_HP_RECOVERY: f32 = 30.0;
 const CHANGE_TIME: u64 = 60;
 
-const IDLE_INWARD_PROB: f64 = 0.75;
+const IDLE_INWARD_PROB: f64 = 0.80;
 
 struct App {
     window: Option<Arc<Window>>,
@@ -423,9 +423,7 @@ fn idle_or_wander(
             let mon_cy = monitor.size().height as f32 / 2.0;
             let dx = mon_cx - center_x as f32;
             let dy = mon_cy - center_y as f32;
-            let base_angle = dy.atan2(dx);
-            let spread = std::f32::consts::FRAC_PI_4;
-            base_angle + rng.random_range(-spread..spread)
+            dy.atan2(dx)
         } else {
             rng.random_range(0.0..TAU)
         };
