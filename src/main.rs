@@ -418,19 +418,27 @@ fn idle_or_wander(
         );
     } else {
         let mut rng = rand::rng();
-        let angle = if rng.random_bool(IDLE_INWARD_PROB) {
-            let mon_cx = monitor.size().width as f32 / 2.0;
-            let mon_cy = monitor.size().height as f32 / 2.0;
-            let dx = mon_cx - center_x as f32;
-            let dy = mon_cy - center_y as f32;
-            dy.atan2(dx)
+
+        let (x, y) = if rng.random_bool(IDLE_INWARD_PROB)
+            && (center_x < 0
+                || center_x > monitor.size().width as i32
+                || center_y < 0
+                || center_y > monitor.size().height as i32)
+        {
+            println!("Change! {:?} {:?}", center_x, center_y);
+            let mon_cx = monitor.size().width / 2;
+            let mon_cy = monitor.size().height / 2;
+            let dx = mon_cx as i32 - center_x;
+            let dy = mon_cy as i32 - center_y;
+            normal(dx, dy)
         } else {
-            rng.random_range(0.0..TAU)
+            let angle = rng.random_range(0.0..TAU);
+            (angle.cos(), angle.sin())
         };
         app.idle = Some(IdleData {
             time: Instant::now(),
-            x: angle.cos(),
-            y: angle.sin(),
+            x: x,
+            y: y,
             change: false,
         });
     }
