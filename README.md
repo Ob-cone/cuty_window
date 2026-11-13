@@ -1,7 +1,5 @@
 # <img src="https://img.itch.zone/aW1hZ2UvNDM4MzM0Ni8yNjE2MDM0MC5wbmc=/original/dhwX5k.png" width="80" align="center"> Cuty Window
 
-[
-
 <a href="https://ob-cone.itch.io/cuty-window"><img src="https://img.shields.io/badge/itch.io-Download-FA5C5C?logo=itch.io&logoColor=white" alt="itch.io"></a>
 
 
