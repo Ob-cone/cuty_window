@@ -1,10 +1,8 @@
-# <img src="https://img.itch.zone/aW1hZ2UvNDM4MzM0Ni8yNjE2MDM0MC5wbmc=/original/dhwX5k.png" width="40" align="center"> Cuty Window
+# <img src="https://img.itch.zone/aW1hZ2UvNDM4MzM0Ni8yNjE2MDM0MC5wbmc=/original/dhwX5k.png" width="80" align="center"> Cuty Window
 
 [
 
-![itch.io](https://img.shields.io/badge/itch.io-다운로드-FA5C5C?logo=itch.io&logoColor=white)
-
-](https://ob-cone.itch.io/cuty-window)
+<a href="https://ob-cone.itch.io/cuty-window"><img src="https://img.shields.io/badge/itch.io-Download-FA5C5C?logo=itch.io&logoColor=white" alt="itch.io"></a>
 
 
 이 귀여운 창을 입양하세요.
