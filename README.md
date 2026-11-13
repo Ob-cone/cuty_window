@@ -6,4 +6,4 @@ Adopt this **cute little window**.
 It roams around your screen!! 
 But it doesn't like you getting too close!
 ### 🎮How to Play
-**[Click](chore: add README.md)** the icon to play.
+**<a href="https://ob-cone.itch.io/cuty-window">Click</a>** the icon to play.
